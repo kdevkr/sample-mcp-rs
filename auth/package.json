@@ -1,0 +1,19 @@
+{
+  "name": "sample-mcp-auth",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "oidc-provider": "9.13.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/oidc-provider": "^9.13.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
