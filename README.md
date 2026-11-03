@@ -127,7 +127,7 @@ OTHER_MCP_URL=http://localhost:3001/other pnpm -C auth e2e
   키를 다른 호스트에서 제공하는 인가 서버라면 `AUTH_JWKS_URI`로 직접 지정한다. 이때는 discovery를 쓰지 않는다.
 - `HOST`는 컨테이너에서 띄울 때 `0.0.0.0`으로 바꾼다.
 - `MCP_ALLOWED_ORIGINS`는 허용할 브라우저 Origin 목록이다(쉼표 구분, 예: `https://app.example.com`).
-  `scheme://host[:port]` 형태만 받고, 경로·쿼리가 붙은 값은 시작할 때 거부한다. 대소문자는 구분하지 않는다.
+  `scheme://host[:port]` 형태만 받고, 경로·쿼리가 붙은 값은 시작할 때 거부한다. 대소문자와 기본 포트(`:443`, `:80`)는 무시한다.
   설정하면 목록에 없는 Origin의 요청은 403으로 거부한다(Origin 헤더가 없는 요청은 통과).
   운영에서는 반드시 설정한다.
 - `MCP_RESOURCE_URL`은 토큰의 `aud`로 쓰인다.
@@ -163,7 +163,8 @@ OTHER_MCP_URL=http://localhost:3001/other pnpm -C auth e2e
   장애 중 새로 뜬 Lambda 인스턴스는 키가 없어 바로 503을 돌려준다.
 - 2048비트 미만 RSA 키(앞에 채운 0은 길이에 넣지 않음), 해석할 수 없는 키, 쓸 수 있는 알고리즘이 없는 키는 받지 않고 경고 로그를 남긴다.
   JWKS에 같은 kid가 여러 번 나오면 처음 키만 쓰고 경고 로그를 남긴다.
-- JWKS를 받을 때 리다이렉트는 따라가지 않는다.
+- JWKS를 받을 때 리다이렉트는 따라가지 않는다(3xx는 503, 로그에 `redirects are not followed`).
+  discovery·JWKS 응답은 64KB까지만 읽는다.
 - 이 검증은 인가 서버를 신뢰한다는 전제다. 인가 서버는 어떤 사용자·테넌트의 토큰이든 발급할 수 있으므로,
   issuer는 하나로 고정하고 https로만 키를 받는다.
 - 모르는 키 ID나 조회 실패가 있어도 재조회는 10초에 한 번만 한다.

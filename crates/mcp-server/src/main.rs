@@ -3,7 +3,7 @@ mod tools;
 
 use std::sync::Arc;
 
-use auth_common::{Verifier, VerifierConfig, url_host};
+use auth_common::{Url, Verifier, VerifierConfig, url_host};
 use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::{HeaderName, HeaderValue, Method, StatusCode, header};
@@ -166,18 +166,25 @@ fn allowed_origins() -> anyhow::Result<Vec<HeaderValue>> {
         .collect()
 }
 
-/// 브라우저가 보내는 Origin 형태(`scheme://host[:port]`, 소문자)로 맞춘다.
+/// 브라우저가 보내는 Origin 형태(`scheme://host[:port]`, 소문자, 기본 포트 생략)로 맞춘다.
 /// 경로·쿼리가 붙은 값은 어떤 Origin과도 일치하지 않아 조용히 차단되므로 시작할 때 거부한다.
+/// WHATWG 파서가 고쳐 읽는 `https:///host`, `https:host` 같은 값도 받지 않는다(대소문자는 무시).
 fn parse_origin(value: &str) -> anyhow::Result<HeaderValue> {
-    let origin = value.trim_end_matches('/').to_ascii_lowercase();
-    let authority = origin
-        .strip_prefix("https://")
-        .or_else(|| origin.strip_prefix("http://"));
-    anyhow::ensure!(
-        authority.is_some_and(|a| !a.is_empty() && !a.contains(['/', '?', '#', '@'])),
-        "MCP_ALLOWED_ORIGINS entry must look like https://host[:port]: {value}"
-    );
-    Ok(HeaderValue::from_str(&origin)?)
+    let url = Url::parse(value).ok().filter(|u| {
+        let lower = value.to_ascii_lowercase();
+        let rest = lower.strip_prefix(&format!("{}://", u.scheme()));
+        matches!(u.scheme(), "http" | "https")
+            && rest.is_some_and(|r| !r.starts_with(['/', '\\']) && !r.ends_with('\\'))
+            && u.username().is_empty()
+            && u.password().is_none()
+            && u.path() == "/"
+            && u.query().is_none()
+            && u.fragment().is_none()
+    });
+    let Some(url) = url else {
+        anyhow::bail!("MCP_ALLOWED_ORIGINS entry must look like https://host[:port]: {value}");
+    };
+    Ok(HeaderValue::from_str(&url.origin().ascii_serialization())?)
 }
 
 /// DNS 리바인딩 방지용 Host 허용 목록.
@@ -325,7 +332,19 @@ mod tests {
             parse_origin("http://localhost:6274").unwrap(),
             "http://localhost:6274"
         );
+        // 브라우저는 기본 포트를 Origin에 넣지 않는다.
+        assert_eq!(
+            parse_origin("HTTPS://app.example.com:443").unwrap(),
+            "https://app.example.com"
+        );
         for bad in [
+            "https://app.example.com\\@evil.com",
+            "https:///app.example.com",
+            "https:app.example.com",
+            "https://app.example.com\\",
+            "https://user:pw@app.example.com",
+            "https://app.example.com#f",
+            "ftp://app.example.com",
             "app.example.com",
             "https://app.example.com/path",
             "https://app.example.com?x=1",

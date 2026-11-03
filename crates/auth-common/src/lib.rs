@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, Jwk, JwkSet, PublicKeyUse};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
+pub use reqwest::Url;
 use serde::Deserialize;
 use tokio::sync::{Mutex, MutexGuard, RwLock};
 
@@ -27,6 +28,9 @@ const JWKS_MAX_AGE: Duration = Duration::from_secs(10 * 60);
 /// 인가 서버 장애로 갱신하지 못할 때 마지막으로 받은 키를 계속 쓸 수 있는 상한.
 /// 이 시간이 지나면 폐기됐을 수 있는 키를 더는 신뢰하지 않고 503으로 실패한다.
 const MAX_STALE_AGE: Duration = Duration::from_secs(60 * 60);
+
+/// discovery·JWKS 응답 크기 상한. 정상 응답은 수 KB다.
+const MAX_RESPONSE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
@@ -82,14 +86,20 @@ fn url_var(name: &'static str) -> Result<String, ConfigError> {
 /// 스킴이 빠지거나 헤더에 실을 수 없는 문자가 있으면 메타데이터 URL과 Host 허용 목록이
 /// 조용히 망가지므로 시작할 때 거부한다. 국제화 도메인은 punycode로 적는다.
 /// 키와 토큰이 오가는 주소라 로컬 개발(localhost)이 아니면 https만 받는다.
+/// 값은 정규화하지 않고 적은 그대로 쓴다. issuer는 토큰의 `iss`와 글자 그대로 비교하기 때문이다.
 fn validate_url(name: &'static str, value: String) -> Result<String, ConfigError> {
-    let rest = value
-        .strip_prefix("https://")
-        .or_else(|| value.strip_prefix("http://"));
     let printable = value.bytes().all(|b| b.is_ascii_graphic());
-    match rest {
-        Some(rest) if printable && !rest.is_empty() && !rest.starts_with(['/', '?', '#']) => {}
-        _ => return Err(ConfigError::InvalidUrl(name, value)),
+    // WHATWG 파서는 `https:///x`를 호스트 x로, `HTTPS://`를 https로 고쳐 읽는다.
+    // 적은 값과 해석한 값이 어긋나지 않도록 소문자 `scheme://호스트`로 시작하는 값만 받는다.
+    let well_formed = reqwest::Url::parse(&value).is_ok_and(|u| {
+        matches!(u.scheme(), "http" | "https")
+            && value
+                .strip_prefix(u.scheme())
+                .and_then(|rest| rest.strip_prefix("://"))
+                .is_some_and(|rest| !rest.starts_with(['/', '\\', '?', '#']))
+    });
+    if !printable || !well_formed {
+        return Err(ConfigError::InvalidUrl(name, value));
     }
     if !is_secure_url(&value) {
         return Err(ConfigError::Insecure(name, value));
@@ -102,11 +112,9 @@ fn is_secure_url(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else {
         return false;
     };
-    match parsed.scheme() {
-        "https" => parsed.host().is_some(),
-        "http" => {
-            url_host(url).is_some_and(|h| matches!(h.as_str(), "localhost" | "127.0.0.1" | "::1"))
-        }
+    match (parsed.scheme(), host_of(&parsed)) {
+        ("https", Some(_)) => true,
+        ("http", Some(h)) => matches!(h.as_str(), "localhost" | "127.0.0.1" | "::1"),
         _ => false,
     }
 }
@@ -115,7 +123,11 @@ fn is_secure_url(url: &str) -> bool {
 /// 실제로 연결할 호스트와 같아야 하므로 HTTP 클라이언트와 같은 WHATWG 파서로 읽는다.
 /// `https://api.example.com:8443/prod/mcp` → `api.example.com`, `http://[::1]:3000` → `::1`
 pub fn url_host(url: &str) -> Option<String> {
-    let host = reqwest::Url::parse(url).ok()?.host()?.to_string();
+    host_of(&reqwest::Url::parse(url).ok()?)
+}
+
+fn host_of(url: &reqwest::Url) -> Option<String> {
+    let host = url.host()?.to_string();
     Some(
         host.trim_start_matches('[')
             .trim_end_matches(']')
@@ -443,16 +455,28 @@ impl Verifier {
         Ok(discovery.jwks_uri)
     }
 
+    /// 리다이렉트는 따라가지 않으므로 3xx는 그대로 오류로 돌려준다(그대로 두면 JSON 해석 오류로 보인다).
+    /// 응답은 MAX_RESPONSE_BYTES까지만 읽는다.
     async fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T, AuthError> {
-        self.http
-            .get(url)
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|e| AuthError::Jwks(e.to_string()))?
-            .json()
-            .await
-            .map_err(|e| AuthError::Jwks(e.to_string()))
+        let err = |e: reqwest::Error| AuthError::Jwks(e.to_string());
+        let res = self.http.get(url).send().await.map_err(err)?;
+        if res.status().is_redirection() {
+            return Err(AuthError::Jwks(format!(
+                "{url} returned {} (redirects are not followed)",
+                res.status()
+            )));
+        }
+        let mut res = res.error_for_status().map_err(err)?;
+        let mut body = Vec::new();
+        while let Some(chunk) = res.chunk().await.map_err(err)? {
+            body.extend_from_slice(&chunk);
+            if body.len() > MAX_RESPONSE_BYTES {
+                return Err(AuthError::Jwks(format!(
+                    "{url} response exceeds {MAX_RESPONSE_BYTES} bytes"
+                )));
+            }
+        }
+        serde_json::from_slice(&body).map_err(|e| AuthError::Jwks(format!("{url}: {e}")))
     }
 }
 
@@ -546,7 +570,11 @@ mod tests {
 
     #[test]
     fn validates_config_urls() {
-        for ok in ["http://localhost:4000", "https://auth.example.com/tenant/x"] {
+        for ok in [
+            "http://localhost:4000",
+            "https://auth.example.com/tenant/x",
+            "http://evil.com@localhost:4000",
+        ] {
             assert!(validate_url("X", ok.into()).is_ok(), "{ok}");
         }
         for bad in [
@@ -560,6 +588,10 @@ mod tests {
             "http://localhost.example.com",
             "http://evil.com\\@localhost:4000",
             "http://evil.com\\@localhost:3000/mcp",
+            "https:\\\\auth.example.com",
+            "https://\\auth.example.com",
+            "HTTPS://auth.example.com",
+            "http://%65vil.com",
         ] {
             assert!(validate_url("X", bad.into()).is_err(), "{bad}");
         }
@@ -578,6 +610,27 @@ mod tests {
                 .await;
             assert!(matches!(err, Err(AuthError::Jwks(_))), "{jwks}: {err:?}");
         }
+        let issuer = issuer_full(None, None, Some("/redirect")).await;
+        let err = issuer.verifier().refresh().await.unwrap_err().to_string();
+        assert!(err.contains("redirects are not followed"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_jwks() {
+        let (base, _) = serve(|_| {
+            Arc::new(|_| {
+                let pad = "x".repeat(MAX_RESPONSE_BYTES);
+                (200, format!(r#"{{"keys":[],"pad":"{pad}"}}"#))
+            })
+        })
+        .await;
+        let v = Verifier::new(VerifierConfig {
+            issuer: base.clone(),
+            audience: AUD.into(),
+            jwks_uri: Some(format!("{base}/jwks")),
+        });
+        let err = v.refresh().await.unwrap_err().to_string();
+        assert!(err.contains("exceeds"), "{err}");
     }
 
     #[tokio::test]
