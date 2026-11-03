@@ -2,7 +2,7 @@ use auth_common::Principal;
 use axum::http::request::Parts;
 use rmcp::handler::server::common::Extension;
 use rmcp::handler::server::wrapper::{Json, Parameters};
-use rmcp::{ErrorData, tool, tool_router};
+use rmcp::{ErrorData, ServerHandler, tool, tool_handler, tool_router};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -22,7 +22,11 @@ pub struct EchoArgs {
     message: String,
 }
 
-#[tool_router(server_handler)]
+// name을 주지 않으면 serverInfo가 rmcp 자체 이름·버전으로 나간다.
+#[tool_handler(name = "sample-mcp-rs")]
+impl ServerHandler for SampleServer {}
+
+#[tool_router]
 impl SampleServer {
     #[tool(description = "현재 토큰의 사용자와 테넌트 정보를 반환한다")]
     async fn whoami(&self, Extension(parts): Extension<Parts>) -> Result<Json<WhoAmI>, ErrorData> {
