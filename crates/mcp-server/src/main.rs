@@ -21,8 +21,7 @@ use crate::tools::SampleServer;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -32,7 +31,12 @@ async fn main() -> anyhow::Result<()> {
     let hosts = allowed_hosts(&config.audience);
     let origins = allowed_origins()?;
     tracing::info!(%path, ?hosts, ?origins, "mcp endpoint");
-    let app = router(AuthState::new(Verifier::new(config), &path), &path, hosts, origins);
+    let app = router(
+        AuthState::new(Verifier::new(config), &path),
+        &path,
+        hosts,
+        origins,
+    );
 
     if std::env::var_os("AWS_LAMBDA_RUNTIME_API").is_some() {
         lambda_http::run(app).await.map_err(|e| anyhow::anyhow!(e))
@@ -61,7 +65,10 @@ fn mcp_path(resource: &str) -> anyhow::Result<String> {
                 .chars()
                 .all(|c| c.is_ascii_alphanumeric() || "-._~".contains(c))
     });
-    anyhow::ensure!(valid, "MCP_RESOURCE_URL path has unsupported characters: {path}");
+    anyhow::ensure!(
+        valid,
+        "MCP_RESOURCE_URL path has unsupported characters: {path}"
+    );
     Ok(path.to_owned())
 }
 
@@ -206,8 +213,16 @@ mod tests {
             audience: "http://localhost:3000/mcp".into(),
             jwks_uri: None,
         });
-        let origins = origins.iter().map(|o| HeaderValue::from_str(o).unwrap()).collect();
-        router(AuthState::new(verifier, "/mcp"), "/mcp", vec!["localhost".into()], origins)
+        let origins = origins
+            .iter()
+            .map(|o| HeaderValue::from_str(o).unwrap())
+            .collect();
+        router(
+            AuthState::new(verifier, "/mcp"),
+            "/mcp",
+            vec!["localhost".into()],
+            origins,
+        )
     }
 
     fn app() -> axum::Router {
@@ -218,7 +233,10 @@ mod tests {
         Request::options("/mcp")
             .header(header::ORIGIN, origin)
             .header(header::ACCESS_CONTROL_REQUEST_METHOD, "POST")
-            .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "authorization,content-type")
+            .header(
+                header::ACCESS_CONTROL_REQUEST_HEADERS,
+                "authorization,content-type",
+            )
             .body(Body::empty())
             .unwrap()
     }
@@ -226,13 +244,25 @@ mod tests {
     #[tokio::test]
     async fn cors_allow_list_limits_origins() {
         let app = app_with_origins(&["https://app.example.com"]);
-        let allowed = app.clone().oneshot(preflight("https://app.example.com")).await.unwrap();
+        let allowed = app
+            .clone()
+            .oneshot(preflight("https://app.example.com"))
+            .await
+            .unwrap();
         assert_eq!(
             allowed.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN],
             "https://app.example.com"
         );
-        let other = app.oneshot(preflight("https://evil.example.com")).await.unwrap();
-        assert!(other.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+        let other = app
+            .oneshot(preflight("https://evil.example.com"))
+            .await
+            .unwrap();
+        assert!(
+            other
+                .headers()
+                .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -278,14 +308,23 @@ mod tests {
             assert_eq!(res.status(), status, "{origin:?}");
         }
         // 허용 목록이 없으면 Origin으로 거부하지 않는다.
-        let res = app().oneshot(post_mcp(Some("https://evil.example.com"))).await.unwrap();
+        let res = app()
+            .oneshot(post_mcp(Some("https://evil.example.com")))
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[test]
     fn parses_allowed_origins() {
-        assert_eq!(parse_origin("https://App.Example.com/").unwrap(), "https://app.example.com");
-        assert_eq!(parse_origin("http://localhost:6274").unwrap(), "http://localhost:6274");
+        assert_eq!(
+            parse_origin("https://App.Example.com/").unwrap(),
+            "https://app.example.com"
+        );
+        assert_eq!(
+            parse_origin("http://localhost:6274").unwrap(),
+            "http://localhost:6274"
+        );
         for bad in [
             "app.example.com",
             "https://app.example.com/path",
@@ -300,7 +339,10 @@ mod tests {
 
     #[tokio::test]
     async fn cors_preflight_is_not_blocked_by_auth() {
-        let res = app().oneshot(preflight("http://localhost:6274")).await.unwrap();
+        let res = app()
+            .oneshot(preflight("http://localhost:6274"))
+            .await
+            .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(res.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
     }
@@ -310,7 +352,10 @@ mod tests {
         for (path, status) in [
             ("/.well-known/oauth-protected-resource", StatusCode::OK),
             ("/.well-known/oauth-protected-resource/mcp", StatusCode::OK),
-            ("/.well-known/oauth-protected-resource/other", StatusCode::NOT_FOUND),
+            (
+                "/.well-known/oauth-protected-resource/other",
+                StatusCode::NOT_FOUND,
+            ),
         ] {
             let res = app()
                 .oneshot(Request::get(path).body(Body::empty()).unwrap())
@@ -323,7 +368,10 @@ mod tests {
     #[test]
     fn mcp_path_follows_resource_url() {
         assert_eq!(mcp_path("http://localhost:3000/mcp").unwrap(), "/mcp");
-        assert_eq!(mcp_path("https://api.example.com/prod/mcp/").unwrap(), "/prod/mcp");
+        assert_eq!(
+            mcp_path("https://api.example.com/prod/mcp/").unwrap(),
+            "/prod/mcp"
+        );
         assert_eq!(mcp_path("https://api.example.com/mcp?x=1").unwrap(), "/mcp");
     }
 
@@ -342,13 +390,28 @@ mod tests {
 
     #[test]
     fn extracts_host_from_url() {
-        assert_eq!(url_host("https://api.example.com/prod/mcp").as_deref(), Some("api.example.com"));
-        assert_eq!(url_host("http://localhost:3000/mcp").as_deref(), Some("localhost"));
+        assert_eq!(
+            url_host("https://api.example.com/prod/mcp").as_deref(),
+            Some("api.example.com")
+        );
+        assert_eq!(
+            url_host("http://localhost:3000/mcp").as_deref(),
+            Some("localhost")
+        );
         assert_eq!(url_host("http://[::1]:3000/mcp").as_deref(), Some("::1"));
-        assert_eq!(url_host("https://api.example.com?x=1").as_deref(), Some("api.example.com"));
-        assert_eq!(url_host("https://api.example.com#f").as_deref(), Some("api.example.com"));
+        assert_eq!(
+            url_host("https://api.example.com?x=1").as_deref(),
+            Some("api.example.com")
+        );
+        assert_eq!(
+            url_host("https://api.example.com#f").as_deref(),
+            Some("api.example.com")
+        );
         assert_eq!(url_host("not a url").as_deref(), None);
         // WHATWG처럼 `\`를 `/`로 본다. 사용자 정보로 읽으면 실제 연결 호스트와 달라진다.
-        assert_eq!(url_host("https://evil.com\\@auth.example.com/jwks").as_deref(), Some("evil.com"));
+        assert_eq!(
+            url_host("https://evil.com\\@auth.example.com/jwks").as_deref(),
+            Some("evil.com")
+        );
     }
 }

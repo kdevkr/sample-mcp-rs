@@ -104,7 +104,9 @@ fn is_secure_url(url: &str) -> bool {
     };
     match parsed.scheme() {
         "https" => parsed.host().is_some(),
-        "http" => url_host(url).is_some_and(|h| matches!(h.as_str(), "localhost" | "127.0.0.1" | "::1")),
+        "http" => {
+            url_host(url).is_some_and(|h| matches!(h.as_str(), "localhost" | "127.0.0.1" | "::1"))
+        }
         _ => false,
     }
 }
@@ -114,7 +116,11 @@ fn is_secure_url(url: &str) -> bool {
 /// `https://api.example.com:8443/prod/mcp` → `api.example.com`, `http://[::1]:3000` → `::1`
 pub fn url_host(url: &str) -> Option<String> {
     let host = reqwest::Url::parse(url).ok()?.host()?.to_string();
-    Some(host.trim_start_matches('[').trim_end_matches(']').to_owned())
+    Some(
+        host.trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_owned(),
+    )
 }
 
 /// 검증을 통과한 호출자. 테넌트 필터링은 이 값만 신뢰한다.
@@ -170,7 +176,8 @@ const MIN_RSA_BITS: usize = 2048;
 /// base64url로 적힌 RSA 모듈러스 `n`의 실제 비트 수. 앞에 채운 0 바이트는 세지 않는다.
 fn rsa_modulus_bits(n: &str) -> usize {
     use base64::Engine;
-    let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(n.trim_end_matches('='))
+    let Ok(bytes) =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(n.trim_end_matches('='))
     else {
         return 0;
     };
@@ -212,7 +219,9 @@ fn usable_keys(set: &JwkSet) -> HashMap<String, CachedKey> {
         if jwk.common.public_key_use == Some(PublicKeyUse::Encryption) {
             continue;
         }
-        let Some(kid) = jwk.common.key_id.clone() else { continue };
+        let Some(kid) = jwk.common.key_id.clone() else {
+            continue;
+        };
         let algs = key_algs(jwk);
         let key = match DecodingKey::from_jwk(jwk) {
             Ok(key) => key,
@@ -283,11 +292,17 @@ impl Verifier {
     pub async fn verify(&self, token: &str) -> Result<Principal, AuthError> {
         let header = decode_header(token).map_err(|e| AuthError::InvalidToken(e.to_string()))?;
         if !ALLOWED_ALGS.contains(&header.alg) {
-            return Err(AuthError::InvalidToken(format!("alg {:?} not allowed", header.alg)));
+            return Err(AuthError::InvalidToken(format!(
+                "alg {:?} not allowed",
+                header.alg
+            )));
         }
         // RFC 9068 §4: ID 토큰 등 다른 용도의 JWT를 액세스 토큰으로 받지 않는다.
         if !header.typ.as_deref().is_some_and(is_access_token_typ) {
-            return Err(AuthError::InvalidToken(format!("typ {:?} is not at+jwt", header.typ)));
+            return Err(AuthError::InvalidToken(format!(
+                "typ {:?} is not at+jwt",
+                header.typ
+            )));
         }
         let kid = header
             .kid
@@ -314,7 +329,10 @@ impl Verifier {
     async fn decoding_key(&self, kid: &str) -> Result<CachedKey, AuthError> {
         let (cached, age) = {
             let cache = self.cache.read().await;
-            (cache.keys.get(kid).cloned(), cache.fetched_at.map(|at| at.elapsed()))
+            (
+                cache.keys.get(kid).cloned(),
+                cache.fetched_at.map(|at| at.elapsed()),
+            )
         };
         if let Some(key) = &cached
             && age.is_some_and(|age| age <= JWKS_MAX_AGE)
@@ -358,7 +376,10 @@ impl Verifier {
     async fn refresh_locked(&self, _guard: MutexGuard<'_, ()>) -> Result<(), AuthError> {
         {
             let cache = self.cache.read().await;
-            if cache.last_attempt.is_some_and(|at| at.elapsed() < MIN_REFRESH_INTERVAL) {
+            if cache
+                .last_attempt
+                .is_some_and(|at| at.elapsed() < MIN_REFRESH_INTERVAL)
+            {
                 return match &cache.last_error {
                     Some(e) => Err(AuthError::Jwks(e.clone())),
                     None => Ok(()),
@@ -461,8 +482,17 @@ mod tests {
     #[tokio::test]
     async fn rejects_non_bearer_schemes() {
         let v = verifier();
-        for h in [None, Some(""), Some("Basic abc"), Some("Bearer "), Some("Bearer")] {
-            assert!(matches!(v.verify_header(h).await, Err(AuthError::MissingToken)), "{h:?}");
+        for h in [
+            None,
+            Some(""),
+            Some("Basic abc"),
+            Some("Bearer "),
+            Some("Bearer"),
+        ] {
+            assert!(
+                matches!(v.verify_header(h).await, Err(AuthError::MissingToken)),
+                "{h:?}"
+            );
         }
     }
 
@@ -471,7 +501,13 @@ mod tests {
         let v = verifier();
         for h in ["Bearer x", "BEARER x", "bearer\tx"] {
             // 스킴은 통과하고 토큰 파싱 단계에서 실패해야 한다.
-            assert!(matches!(v.verify_header(Some(h)).await, Err(AuthError::InvalidToken(_))), "{h}");
+            assert!(
+                matches!(
+                    v.verify_header(Some(h)).await,
+                    Err(AuthError::InvalidToken(_))
+                ),
+                "{h}"
+            );
         }
     }
 
@@ -487,7 +523,10 @@ mod tests {
         for typ in [r#""typ":"JWT","#, ""] {
             let token = unsigned_token(&format!(r#"{{"alg":"ES256",{typ}"kid":"k"}}"#));
             let err = v.verify(&token).await.unwrap_err();
-            assert!(matches!(&err, AuthError::InvalidToken(m) if m.contains("typ")), "{err}");
+            assert!(
+                matches!(&err, AuthError::InvalidToken(m) if m.contains("typ")),
+                "{err}"
+            );
         }
         assert!(is_access_token_typ("at+jwt"));
         assert!(is_access_token_typ("application/AT+JWT"));
@@ -533,7 +572,10 @@ mod tests {
     async fn rejects_jwks_uri_outside_issuer_or_via_redirect() {
         for jwks in ["https://keys.attacker.example/jwks", "/redirect"] {
             let issuer = issuer_full(None, None, Some(jwks)).await;
-            let err = issuer.verifier().verify(&issuer.token(serde_json::json!({}))).await;
+            let err = issuer
+                .verifier()
+                .verify(&issuer.token(serde_json::json!({})))
+                .await;
             assert!(matches!(err, Err(AuthError::Jwks(_))), "{jwks}: {err:?}");
         }
     }
@@ -569,7 +611,9 @@ mod tests {
                 let (status, body) = respond(path);
                 // 302 응답이면 body를 Location으로 쓴다.
                 let res = if status == 302 {
-                    format!("HTTP/1.1 302 X\r\nlocation: {body}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+                    format!(
+                        "HTTP/1.1 302 X\r\nlocation: {body}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+                    )
                 } else {
                     format!(
                         "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
@@ -671,8 +715,15 @@ mod tests {
     #[tokio::test]
     async fn accepts_valid_signed_access_token() {
         let issuer = issuer_with(None, None).await;
-        let p = issuer.verifier().verify(&issuer.token(serde_json::json!({}))).await.unwrap();
-        assert_eq!((p.sub.as_str(), p.tenant_id.as_str()), ("alice", "tenant-a"));
+        let p = issuer
+            .verifier()
+            .verify(&issuer.token(serde_json::json!({})))
+            .await
+            .unwrap();
+        assert_eq!(
+            (p.sub.as_str(), p.tenant_id.as_str()),
+            ("alice", "tenant-a")
+        );
         assert_eq!(p.scopes, ["mcp:read"]);
     }
 
@@ -688,7 +739,10 @@ mod tests {
             serde_json::json!({ "nbf": now + 3600 }),
         ] {
             let token = issuer.token(patch.clone());
-            assert!(matches!(v.verify(&token).await, Err(AuthError::InvalidToken(_))), "{patch}");
+            assert!(
+                matches!(v.verify(&token).await, Err(AuthError::InvalidToken(_))),
+                "{patch}"
+            );
         }
         // 같은 kid·iss를 쓰지만 다른 키로 서명한 위조 토큰
         let attacker = issuer_with(None, None).await;
@@ -697,7 +751,10 @@ mod tests {
             signing: attacker.signing,
         }
         .token(serde_json::json!({}));
-        assert!(matches!(v.verify(&forged).await, Err(AuthError::InvalidToken(_))));
+        assert!(matches!(
+            v.verify(&forged).await,
+            Err(AuthError::InvalidToken(_))
+        ));
     }
 
     #[tokio::test]
@@ -708,7 +765,10 @@ mod tests {
         // EC 키에 RS256을 주장하는 토큰. 서명 검증 전에 알고리즘 불일치로 거부한다.
         let token = unsigned_token(r#"{"alg":"RS256","typ":"at+jwt","kid":"k1"}"#);
         let err = v.verify(&token).await.unwrap_err();
-        assert!(matches!(&err, AuthError::InvalidToken(m) if m.contains("does not match")), "{err}");
+        assert!(
+            matches!(&err, AuthError::InvalidToken(m) if m.contains("does not match")),
+            "{err}"
+        );
     }
 
     #[tokio::test]
@@ -716,7 +776,10 @@ mod tests {
         // P-256 키인데 JWK가 RS256이라고 적은 경우 그 키는 쓰지 않는다.
         let issuer = issuer_with(Some("RS256"), None).await;
         let token = issuer.token(serde_json::json!({}));
-        assert!(matches!(issuer.verifier().verify(&token).await, Err(AuthError::UnknownKey)));
+        assert!(matches!(
+            issuer.verifier().verify(&token).await,
+            Err(AuthError::UnknownKey)
+        ));
     }
 
     /// 최상위 비트가 1인 `bits`비트 모듈러스. 앞에 `zero_pad`바이트의 0을 붙일 수 있다.
@@ -767,21 +830,36 @@ mod tests {
         // 설정은 끝에 `/`가 없고 discovery는 `/`가 붙은 경우: 원인을 담은 오류로 실패한다.
         let base = issuer_with(None, None).await.base;
         let issuer = issuer_with(None, Some(&format!("{base}/"))).await;
-        let err = issuer.verifier().verify(&issuer.token(serde_json::json!({}))).await.unwrap_err();
-        assert!(matches!(&err, AuthError::Jwks(m) if m.contains("issuer mismatch")), "{err}");
+        let err = issuer
+            .verifier()
+            .verify(&issuer.token(serde_json::json!({})))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(&err, AuthError::Jwks(m) if m.contains("issuer mismatch")),
+            "{err}"
+        );
     }
 
     #[tokio::test]
     async fn failed_jwks_fetch_is_not_retried_immediately() {
         let (issuer, hits) = failing_issuer().await;
-        let v = Verifier::new(VerifierConfig { issuer, audience: AUD.into(), jwks_uri: None });
+        let v = Verifier::new(VerifierConfig {
+            issuer,
+            audience: AUD.into(),
+            jwks_uri: None,
+        });
         assert!(matches!(v.refresh().await, Err(AuthError::Jwks(_))));
         assert!(matches!(v.refresh().await, Err(AuthError::Jwks(_))));
         assert_eq!(hits.load(Ordering::SeqCst), 1);
     }
 
     async fn verifier_with_cached_key(issuer: String, age: Duration) -> Verifier {
-        let v = Verifier::new(VerifierConfig { issuer, audience: AUD.into(), jwks_uri: None });
+        let v = Verifier::new(VerifierConfig {
+            issuer,
+            audience: AUD.into(),
+            jwks_uri: None,
+        });
         let mut cache = v.cache.write().await;
         cache.keys.insert(
             "known".into(),
@@ -800,7 +878,10 @@ mod tests {
         let (issuer, hits) = failing_issuer().await;
         let v = verifier_with_cached_key(issuer, JWKS_MAX_AGE + Duration::from_secs(60)).await;
         assert!(v.decoding_key("known").await.is_ok());
-        assert!(matches!(v.decoding_key("unknown").await, Err(AuthError::Jwks(_))));
+        assert!(matches!(
+            v.decoding_key("unknown").await,
+            Err(AuthError::Jwks(_))
+        ));
         assert_eq!(hits.load(Ordering::SeqCst), 1);
     }
 
@@ -808,7 +889,10 @@ mod tests {
     async fn cached_key_is_not_used_past_max_stale_age() {
         let (issuer, _) = failing_issuer().await;
         let v = verifier_with_cached_key(issuer, MAX_STALE_AGE + Duration::from_secs(60)).await;
-        assert!(matches!(v.decoding_key("known").await, Err(AuthError::Jwks(_))));
+        assert!(matches!(
+            v.decoding_key("known").await,
+            Err(AuthError::Jwks(_))
+        ));
     }
 
     #[tokio::test]

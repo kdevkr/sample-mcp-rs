@@ -120,7 +120,10 @@ mod tests {
             split_resource("https://mcp.example.com/prod/mcp"),
             ("https://mcp.example.com", "/prod/mcp")
         );
-        assert_eq!(split_resource("http://localhost:3000"), ("http://localhost:3000", ""));
+        assert_eq!(
+            split_resource("http://localhost:3000"),
+            ("http://localhost:3000", "")
+        );
         assert_eq!(
             split_resource("https://api.example.com?x=1#f"),
             ("https://api.example.com", "")
