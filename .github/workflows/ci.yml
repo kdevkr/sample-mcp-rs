@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - run: pnpm -C auth audit
+
+  auth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: auth/pnpm-lock.yaml
+      - run: pnpm -C auth install --frozen-lockfile
+      - run: pnpm -C auth typecheck
+
+  # 인가 서버와 MCP 서버 두 개(aud 검증용)를 띄워 실제 토큰으로 확인한다.
+  e2e:
+    needs: [rust, auth]
+    runs-on: ubuntu-latest
+    env:
+      AUTH_ISSUER: http://localhost:4000
+      MCP_RESOURCE_URL: http://localhost:3000/mcp
+      OTHER_MCP_URL: http://localhost:3001/other
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: auth/pnpm-lock.yaml
+      - run: pnpm -C auth install --frozen-lockfile
+      - run: cargo build -p mcp-server --locked
+      - name: Start servers
+        run: |
+          pnpm -C auth start > auth.log 2>&1 &
+          ./target/debug/mcp-server > mcp.log 2>&1 &
+          PORT=3001 MCP_RESOURCE_URL=$OTHER_MCP_URL ./target/debug/mcp-server > other.log 2>&1 &
+          for url in $AUTH_ISSUER/.well-known/openid-configuration \
+                     http://localhost:3000/.well-known/oauth-protected-resource \
+                     http://localhost:3001/.well-known/oauth-protected-resource; do
+            curl -sf --retry 30 --retry-connrefused --retry-delay 1 -o /dev/null "$url"
+          done
+      - run: pnpm -C auth e2e
+      - if: failure()
+        run: tail -n 50 auth.log mcp.log other.log

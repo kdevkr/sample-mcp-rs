@@ -6,7 +6,7 @@ publish.workspace = true
 
 [dependencies]
 base64 = "0.22"
-jsonwebtoken = { workspace = true, features = ["rust_crypto"] }
+jsonwebtoken = { workspace = true, features = ["aws_lc_rs"] }
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -15,6 +15,7 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
-p256 = { version = "0.13", features = ["pkcs8", "jwk", "ecdsa"] }
-rand_core = { version = "0.6", features = ["getrandom"] }
+aws-lc-rs = "1"
+# 테스트 RSA 키(PKCS#8)를 PEM으로 읽기 위해서만 켠다.
+jsonwebtoken = { workspace = true, features = ["use_pem"] }
 tokio = { workspace = true, features = ["net", "io-util", "time"] }

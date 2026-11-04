@@ -485,10 +485,10 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
+    use aws_lc_rs::rsa::{KeyPair as RsaKeyPair, KeySize};
+    use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
     use jsonwebtoken::{EncodingKey, Header, encode};
-    use p256::SecretKey;
-    use p256::pkcs8::EncodePrivateKey;
-    use rand_core::OsRng;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -536,9 +536,7 @@ mod tests {
     }
 
     fn unsigned_token(header: &str) -> String {
-        use base64::Engine;
-        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-        format!("{}.{}.sig", b64.encode(header), b64.encode("{}"))
+        format!("{}.{}.sig", b64(header.as_bytes()), b64(b"{}"))
     }
 
     #[tokio::test]
@@ -683,10 +681,11 @@ mod tests {
         serve(|_| Arc::new(|_| (500, String::new()))).await
     }
 
-    /// 테스트마다 새로 만든 P-256 키로 서명하는 가짜 인가 서버.
+    /// 테스트마다 새로 만든 키로 서명하는 가짜 인가 서버.
     struct TestIssuer {
         base: String,
         signing: EncodingKey,
+        alg: Algorithm,
     }
 
     const AUD: &str = "http://localhost/mcp";
@@ -703,15 +702,33 @@ mod tests {
         discovery_issuer: Option<&str>,
         jwks_path: Option<&str>,
     ) -> TestIssuer {
-        let secret = SecretKey::random(&mut OsRng);
-        let der = secret.to_pkcs8_der().unwrap();
-        let mut jwk: serde_json::Value =
-            serde_json::from_str(&secret.public_key().to_jwk_string()).unwrap();
-        jwk["kid"] = "k1".into();
-        jwk["use"] = "sig".into();
+        let pair = EcdsaKeyPair::generate(&ECDSA_P256_SHA256_FIXED_SIGNING).unwrap();
+        let der = pair.to_pkcs8v1().unwrap();
+        // 비압축 공개키는 0x04 || x(32바이트) || y(32바이트)다.
+        let (x, y) = pair.public_key().as_ref()[1..].split_at(32);
+        let mut jwk = serde_json::json!({
+            "kty": "EC", "crv": "P-256", "x": b64(x), "y": b64(y), "kid": "k1", "use": "sig",
+        });
         if let Some(alg) = jwk_alg {
             jwk["alg"] = alg.into();
         }
+        let signing = EncodingKey::from_ec_der(der.as_ref());
+        serve_issuer(jwk, signing, Algorithm::ES256, discovery_issuer, jwks_path).await
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        use base64::Engine as _;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    }
+
+    /// `jwk`(kid `k1`)를 JWKS로 내주고 `signing`으로 `alg` 토큰을 서명하는 가짜 인가 서버를 띄운다.
+    async fn serve_issuer(
+        jwk: serde_json::Value,
+        signing: EncodingKey,
+        alg: Algorithm,
+        discovery_issuer: Option<&str>,
+        jwks_path: Option<&str>,
+    ) -> TestIssuer {
         let discovery_issuer = discovery_issuer.map(str::to_owned);
         let jwks_path = jwks_path.unwrap_or("/jwks").to_owned();
         let (base, _) = serve(move |base| {
@@ -733,10 +750,7 @@ mod tests {
             })
         })
         .await;
-        TestIssuer {
-            base,
-            signing: EncodingKey::from_ec_der(der.as_bytes()),
-        }
+        TestIssuer { base, signing, alg }
     }
 
     impl TestIssuer {
@@ -758,7 +772,7 @@ mod tests {
             for (k, v) in patch.as_object().unwrap() {
                 claims[k] = v.clone();
             }
-            let mut header = Header::new(Algorithm::ES256);
+            let mut header = Header::new(self.alg);
             header.typ = Some("at+jwt".into());
             header.kid = Some("k1".into());
             encode(&header, &claims, &self.signing).unwrap()
@@ -801,13 +815,45 @@ mod tests {
         let attacker = issuer_with(None, None).await;
         let forged = TestIssuer {
             base: issuer.base.clone(),
-            signing: attacker.signing,
+            ..attacker
         }
         .token(serde_json::json!({}));
         assert!(matches!(
             v.verify(&forged).await,
             Err(AuthError::InvalidToken(_))
         ));
+    }
+
+    #[tokio::test]
+    async fn verifies_rsa_signed_tokens() {
+        let pair = RsaKeyPair::generate(KeySize::Rsa2048).unwrap();
+        // jsonwebtoken의 RSA DER 입력은 PKCS#1만 받아서 PKCS#8은 PEM으로 넘긴다.
+        let der = AsDer::<Pkcs8V1Der>::as_der(&pair).unwrap();
+        let pem = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, der.as_ref())
+        );
+        let public = pair.public_key();
+        let jwk = serde_json::json!({
+            "kty": "RSA", "kid": "k1", "use": "sig",
+            "n": b64(public.modulus().big_endian_without_leading_zero()),
+            "e": b64(public.exponent().big_endian_without_leading_zero()),
+        });
+        for alg in [Algorithm::RS256, Algorithm::PS256] {
+            let signing = EncodingKey::from_rsa_pem(pem.as_bytes()).unwrap();
+            let issuer = serve_issuer(jwk.clone(), signing, alg, None, None).await;
+            let v = issuer.verifier();
+            let token = issuer.token(serde_json::json!({}));
+            assert_eq!(v.verify(&token).await.unwrap().sub, "alice", "{alg:?}");
+            // 서명 첫 문자를 바꾼 토큰. 마지막 문자는 쓰지 않는 비트만 바뀔 수 있어 피한다.
+            let i = token.rfind('.').unwrap() + 1;
+            let mut tampered = token.clone();
+            tampered.replace_range(i..=i, if &token[i..=i] == "A" { "B" } else { "A" });
+            assert!(
+                matches!(v.verify(&tampered).await, Err(AuthError::InvalidToken(_))),
+                "{alg:?}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -837,11 +883,10 @@ mod tests {
 
     /// 최상위 비트가 1인 `bits`비트 모듈러스. 앞에 `zero_pad`바이트의 0을 붙일 수 있다.
     fn rsa_n(bits: usize, zero_pad: usize) -> String {
-        use base64::Engine;
         let mut n = vec![0u8; zero_pad];
         n.push(0x80);
         n.resize(zero_pad + bits / 8, 0x01);
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(n)
+        b64(&n)
     }
 
     fn rsa_jwk(kid: &str, n_bytes: usize) -> serde_json::Value {

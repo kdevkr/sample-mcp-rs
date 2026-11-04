@@ -104,6 +104,13 @@ OTHER_MCP_URL=http://localhost:3001/other pnpm -C auth e2e
 
 두 MCP 서버는 같은 `AUTH_ISSUER`를 써야 한다. 그래야 401이 `aud` 불일치 때문에 난다는 게 확인된다.
 
+GitHub Actions(`.github/workflows/ci.yml`)는 푸시와 PR마다 아래를 실행한다.
+
+- `cargo fmt --check`, `clippy -D warnings`, `cargo test`
+- `cargo audit`, `pnpm audit`
+- 인가 서버 `typecheck`
+- 위 서버 세 개를 띄운 e2e (`OTHER_MCP_URL` 포함)
+
 ## 환경 변수
 
 | 이름 | 사용처 | 기본값 |
