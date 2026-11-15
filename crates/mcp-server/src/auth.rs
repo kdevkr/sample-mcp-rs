@@ -2,16 +2,13 @@
 
 use std::sync::Arc;
 
-use auth_common::{AuthError, Verifier};
+use auth_common::{AuthError, REQUIRED_SCOPE, Verifier};
 use axum::Json;
 use axum::extract::{Request, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
-
-/// MCP 도구 호출에 필요한 스코프. 인가 서버의 resource 스코프와 맞춘다.
-const REQUIRED_SCOPE: &str = "mcp:read";
 
 #[derive(Clone)]
 pub struct AuthState {

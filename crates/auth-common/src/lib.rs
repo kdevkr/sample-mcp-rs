@@ -135,6 +135,9 @@ fn host_of(url: &reqwest::Url) -> Option<String> {
     )
 }
 
+/// MCP 도구 호출에 필요한 스코프. 인가 서버의 resource 스코프와 맞춘다.
+pub const REQUIRED_SCOPE: &str = "mcp:read";
+
 /// 검증을 통과한 호출자. 테넌트 필터링은 이 값만 신뢰한다.
 #[derive(Debug, Clone)]
 pub struct Principal {

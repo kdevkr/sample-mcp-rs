@@ -190,6 +190,10 @@ GitHub Actions(`.github/workflows/ci.yml`)는 푸시와 PR마다 아래를 실�
 
 **authorizer**
 
+- MCP 서버와 같은 토큰을 받는 그 밖의 API 라우트용이다.
+  `aud`가 `MCP_RESOURCE_URL`이고 `mcp:read` 스코프가 있어야 통과한다.
+  통과하면 `sub`, `tenant_id`를 authorizer context로 넘긴다.
+  다른 audience의 토큰을 받으려면 인가 서버에 그 resource를 추가하고 authorizer의 `MCP_RESOURCE_URL`을 그 값으로 띄운다.
 - `/mcp`와 `/.well-known/*`에는 붙이지 않는다.
 - 거부하면 API Gateway가 `WWW-Authenticate` 없이 403을 돌려준다.
 - 그러면 MCP 클라이언트가 로그인 흐름을 시작하지 못한다.
