@@ -12,6 +12,10 @@ updates:
     directory: /auth
     schedule:
       interval: weekly
+    ignore:
+      # 타입은 CI·README의 Node 24에 맞춘다. Node를 올릴 때 함께 올린다.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       npm:
         patterns: ["*"]
