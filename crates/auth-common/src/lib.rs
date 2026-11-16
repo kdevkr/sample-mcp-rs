@@ -265,6 +265,8 @@ struct JwksCache {
     fetched_at: Option<Instant>,
     last_attempt: Option<Instant>,
     last_error: Option<String>,
+    /// discovery에서 찾은 JWKS 주소. JWKS 조회가 실패하면 비워 다음에 다시 찾는다.
+    jwks_uri: Option<String>,
 }
 
 pub struct Verifier {
@@ -406,28 +408,32 @@ impl Verifier {
         let mut cache = self.cache.write().await;
         cache.last_attempt = Some(Instant::now());
         match result {
-            Ok(keys) => {
+            Ok((keys, jwks_uri)) => {
                 tracing::info!(count = keys.len(), "jwks refreshed");
                 cache.keys = keys;
                 cache.fetched_at = cache.last_attempt;
                 cache.last_error = None;
+                cache.jwks_uri = Some(jwks_uri);
                 Ok(())
             }
             Err(e) => {
                 cache.last_error = Some(e.to_string());
+                cache.jwks_uri = None;
                 Err(e)
             }
         }
     }
 
     /// 서명용 키만 골라 kid → DecodingKey로 미리 변환해 둔다. 쓸 수 있는 알고리즘이 없는 키는 버린다.
-    async fn fetch_keys(&self) -> Result<HashMap<String, CachedKey>, AuthError> {
-        let jwks_uri = match &self.config.jwks_uri {
-            Some(uri) => uri.clone(),
+    /// discovery는 처음과 직전 조회가 실패했을 때만 받는다. 키를 받은 주소도 함께 돌려준다.
+    async fn fetch_keys(&self) -> Result<(HashMap<String, CachedKey>, String), AuthError> {
+        let cached = self.cache.read().await.jwks_uri.clone();
+        let jwks_uri = match self.config.jwks_uri.clone().or(cached) {
+            Some(uri) => uri,
             None => self.discover_jwks_uri().await?,
         };
         let set: JwkSet = self.get_json(&jwks_uri).await?;
-        Ok(usable_keys(&set))
+        Ok((usable_keys(&set), jwks_uri))
     }
 
     /// discovery 문서에서 JWKS 주소를 찾는다. 응답이 바뀌어도 키를 다른 곳에서 받아오지 않도록
@@ -689,6 +695,8 @@ mod tests {
         base: String,
         signing: EncodingKey,
         alg: Algorithm,
+        /// 이 서버가 받은 요청 수
+        hits: Arc<AtomicUsize>,
     }
 
     const AUD: &str = "http://localhost/mcp";
@@ -734,7 +742,7 @@ mod tests {
     ) -> TestIssuer {
         let discovery_issuer = discovery_issuer.map(str::to_owned);
         let jwks_path = jwks_path.unwrap_or("/jwks").to_owned();
-        let (base, _) = serve(move |base| {
+        let (base, hits) = serve(move |base| {
             let base = base.to_owned();
             let issuer = discovery_issuer.unwrap_or_else(|| base.clone());
             let jwks_uri = match jwks_path.starts_with('/') {
@@ -753,7 +761,12 @@ mod tests {
             })
         })
         .await;
-        TestIssuer { base, signing, alg }
+        TestIssuer {
+            base,
+            signing,
+            alg,
+            hits,
+        }
     }
 
     impl TestIssuer {
@@ -940,6 +953,18 @@ mod tests {
             matches!(&err, AuthError::Jwks(m) if m.contains("issuer mismatch")),
             "{err}"
         );
+    }
+
+    #[tokio::test]
+    async fn discovery_is_reused_across_refreshes() {
+        let issuer = issuer_with(None, None).await;
+        let v = issuer.verifier();
+        v.refresh().await.unwrap();
+        // 재조회 최소 간격이 지난 것처럼 만든다.
+        v.cache.write().await.last_attempt = None;
+        v.refresh().await.unwrap();
+        // discovery 1번 + JWKS 2번
+        assert_eq!(issuer.hits.load(Ordering::SeqCst), 3);
     }
 
     #[tokio::test]

@@ -31,7 +31,7 @@ async function getJson(url, init) {
 }
 
 /** devInteractions 화면을 따라가 인가 코드를 받는다. 로그인이 거부되면 응답 상태를 돌려준다. */
-async function authorize(disc, clientId, login) {
+async function authorize(disc, clientId, login, scope = 'openid mcp:read') {
   const jar = new Map();
   const request = async (url, init = {}) => {
     const cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
@@ -50,7 +50,7 @@ async function authorize(disc, clientId, login) {
     client_id: clientId,
     response_type: 'code',
     redirect_uri: REDIRECT_URI,
-    scope: 'openid mcp:read',
+    scope,
     code_challenge: challenge,
     code_challenge_method: 'S256',
     resource: MCP,
@@ -83,8 +83,8 @@ async function authorize(disc, clientId, login) {
   throw new Error('authorization did not finish');
 }
 
-async function callTool(token, name) {
-  const res = await fetch(MCP, {
+function callTool(token, name, args = {}) {
+  return fetch(MCP, {
     method: 'POST',
     headers: {
       authorization: `Bearer ${token}`,
@@ -92,10 +92,33 @@ async function callTool(token, name) {
       accept: 'application/json, text/event-stream',
       'mcp-protocol-version': '2025-11-25',
     },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: {} } }),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
   });
+}
+
+async function toolResult(token, name, args) {
+  const res = await callTool(token, name, args);
   assert.equal(res.status, 200, `tools/call ${name}`);
-  return (await res.json()).result.structuredContent;
+  return (await res.json()).result;
+}
+
+/** 로그인부터 토큰 교환까지 거쳐 액세스 토큰을 받는다. */
+async function accessToken(disc, clientId, login, scope) {
+  const { code, verifier } = await authorize(disc, clientId, login, scope);
+  assert.ok(code, `${login}: no authorization code`);
+  const token = await getJson(disc.token_endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: REDIRECT_URI,
+      client_id: clientId,
+      code_verifier: verifier,
+      resource: MCP,
+    }),
+  });
+  return token.access_token;
 }
 
 const disc = await discover();
@@ -112,24 +135,22 @@ const client = await getJson(disc.registration_endpoint, {
 
 let lastToken;
 for (const [login, tenant] of [['alice', 'tenant-a'], ['bob', 'tenant-b']]) {
-  const { code, verifier } = await authorize(disc, client.client_id, login);
-  assert.ok(code, `${login}: no authorization code`);
-  const token = await getJson(disc.token_endpoint, {
-    method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'authorization_code',
-      code,
-      redirect_uri: REDIRECT_URI,
-      client_id: client.client_id,
-      code_verifier: verifier,
-      resource: MCP,
-    }),
-  });
-  const whoami = await callTool(token.access_token, 'whoami');
+  const token = await accessToken(disc, client.client_id, login);
+  const whoami = (await toolResult(token, 'whoami')).structuredContent;
   assert.deepEqual(whoami, { sub: login, tenant_id: tenant, scopes: ['mcp:read'] });
-  console.log(`ok  ${login} → ${tenant}`);
-  lastToken = token.access_token;
+  const echo = await toolResult(token, 'echo', { message: 'hi' });
+  assert.equal(echo.content[0].text, `[${tenant}] hi`);
+  console.log(`ok  ${login} → ${tenant} (whoami, echo)`);
+  lastToken = token;
+}
+
+// mcp:read 없이 받은 토큰은 403 insufficient_scope로 스코프를 올리라고 알린다.
+{
+  const token = await accessToken(disc, client.client_id, 'alice', 'openid');
+  const res = await callTool(token, 'whoami');
+  assert.equal(res.status, 403, 'token without mcp:read must be rejected');
+  assert.match(res.headers.get('www-authenticate') ?? '', /insufficient_scope/);
+  console.log('ok  token without mcp:read rejected (403 insufficient_scope)');
 }
 
 // 선택: 다른 resource로 띄운 MCP 서버가 이 토큰(aud가 다름)을 거부하는지 본다.

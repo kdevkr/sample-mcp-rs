@@ -19,3 +19,9 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Lambda 배포용. 바이너리를 줄여 업로드·콜드 스타트 부담을 낮춘다.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

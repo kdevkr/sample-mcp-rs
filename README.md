@@ -130,6 +130,7 @@ GitHub Actions(`.github/workflows/ci.yml`)는 푸시와 PR마다 아래를 실�
 - `AUTH_ISSUER`는 인가 서버의 issuer와 끝의 `/`까지 정확히 같아야 한다.
   다르면 모든 요청이 503이 되고, 로그에 `issuer mismatch`가 남는다.
 - 서명 키(JWKS) 주소는 discovery 문서에서 찾는다.
+  처음 한 번 찾아 두고, 키를 받지 못하면 다음 조회 때 다시 찾는다.
   이 주소가 https가 아니거나 issuer와 호스트가 다르면 받지 않는다(503, 로그에 `untrusted jwks_uri`).
   키를 다른 호스트에서 제공하는 인가 서버라면 `AUTH_JWKS_URI`로 직접 지정한다. 이때는 discovery를 쓰지 않는다.
 - `HOST`는 컨테이너에서 띄울 때 `0.0.0.0`으로 바꾼다.
@@ -180,9 +181,23 @@ GitHub Actions(`.github/workflows/ci.yml`)는 푸시와 PR마다 아래를 실�
 
 ## 배포 메모
 
+**빌드**
+
+[cargo-lambda](https://www.cargo-lambda.info/)로 Lambda용 바이너리를 만든다.
+release 프로필은 크기를 줄이도록 `lto`, `strip`을 켜 두었다.
+
+```bash
+cargo lambda build --release --arm64 -p mcp-server -p authorizer
+```
+
+**로컬·컨테이너**
+
+- `SIGTERM`이나 Ctrl+C를 받으면 새 연결을 받지 않고, 처리 중인 요청을 마친 뒤 끝낸다.
+
 **Lambda**
 
 - `AWS_LAMBDA_RUNTIME_API`를 감지해 `lambda_http`로 실행한다.
+- 로그는 authorizer와 같이 JSON으로 남긴다.
 - 인스턴스 간 세션을 공유할 수 없어 stateless로 고정했다.
 - Lambda가 받는 요청 경로와 `MCP_RESOURCE_URL` 경로가 같아야 한다.
   API Gateway 스테이지 이름이 경로에 붙는 구성이면 그 경로까지 `MCP_RESOURCE_URL`에 넣는다.
