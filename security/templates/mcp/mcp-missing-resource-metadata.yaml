@@ -1,0 +1,28 @@
+id: mcp-missing-resource-metadata
+
+info:
+  name: MCP 401 응답에 resource_metadata 누락
+  author: sample-mcp-rs
+  severity: low
+  description: |
+    MCP 인가 스펙은 401 응답의 WWW-Authenticate에 resource_metadata를 넣도록 한다.
+    빠지면 MCP 클라이언트가 인가 서버를 찾지 못해 로그인 흐름을 시작하지 못한다.
+  tags: mcp,auth,custom
+
+http:
+  - method: POST
+    path:
+      - "{{BaseURL}}"
+    headers:
+      Content-Type: application/json
+      Accept: application/json, text/event-stream
+    body: '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 401
+      - type: dsl
+        dsl:
+          - '!contains(to_lower(www_authenticate), "resource_metadata=")'

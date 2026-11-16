@@ -95,3 +95,59 @@ jobs:
       - run: pnpm -C auth e2e
       - if: failure()
         run: tail -n 50 auth.log mcp.log other.log
+
+  # ProjectDiscovery 도구(httpx, nuclei, tlsx, naabu)로 실행 중인 서버를 검사한다. high 이상이면 실패.
+  # 먼저 일부러 취약한 서버로 모든 검사가 실제로 잡는지 확인한다.
+  security-scan:
+    needs: [rust, auth]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AUTH_ISSUER: http://localhost:4000
+      MCP_RESOURCE_URL: http://localhost:3000/mcp
+      NUCLEI_TAG: v3.11.1
+      HTTPX_TAG: v1.12.0
+      TLSX_TAG: v1.2.2
+      NAABU_TAG: v2.7.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          version: 10
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: auth/pnpm-lock.yaml
+      - run: pnpm -C auth install --frozen-lockfile
+      - run: cargo build -p mcp-server --locked
+      - name: Pull ProjectDiscovery images
+        run: |
+          for img in nuclei:$NUCLEI_TAG httpx:$HTTPX_TAG tlsx:$TLSX_TAG naabu:$NAABU_TAG; do
+            docker pull -q projectdiscovery/$img
+          done
+      - name: Checks catch a vulnerable server
+        run: security/selftest.sh
+      - name: Start servers
+        run: |
+          pnpm -C auth start > auth.log 2>&1 &
+          ./target/debug/mcp-server > mcp.log 2>&1 &
+          for url in $AUTH_ISSUER/.well-known/openid-configuration                      http://localhost:3000/.well-known/oauth-protected-resource; do
+            curl -sf --retry 30 --retry-connrefused --retry-delay 1 -o /dev/null "$url"
+          done
+      - name: Scan
+        run: security/scan.sh
+        env:
+          PORT_HOST: 127.0.0.1
+          # 22는 러너의 SSH 포트
+          ALLOWED_PORTS: 22,3000,4000
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: security-reports
+          # selftest가 만든 임시 TLS 개인 키는 올리지 않는다.
+          path: |
+            security/reports
+            !security/reports/selftest/tls.key

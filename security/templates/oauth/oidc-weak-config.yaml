@@ -1,0 +1,40 @@
+id: oidc-weak-config
+
+info:
+  name: OIDC 인가 서버 설정 점검
+  author: sample-mcp-rs
+  severity: medium
+  description: |
+    discovery 문서에서 MCP 인가에 맞지 않는 설정을 찾는다.
+    - PKCE plain 허용
+    - implicit grant 허용 (OAuth 2.1에서 제거됨)
+    - 동적 클라이언트 등록 공개 (MCP에서는 의도된 설정일 수 있음)
+  tags: oauth,oidc,misconfig,custom
+
+http:
+  - method: GET
+    path:
+      - "{{RootURL}}/.well-known/openid-configuration"
+      - "{{RootURL}}/.well-known/oauth-authorization-server"
+    stop-at-first-match: true
+
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: dsl
+        dsl:
+          - 'contains(body, "\"plain\"") || contains(body, "\"implicit\"") || !contains(body, "\"code_challenge_methods_supported\"")'
+
+    extractors:
+      - type: regex
+        name: weakness
+        regex:
+          - '"(implicit)"'
+          - '"code_challenge_methods_supported"\s*:\s*\[[^\]]*"(plain)"'
+        group: 1
+      - type: json
+        name: registration_endpoint
+        json:
+          - '.registration_endpoint'

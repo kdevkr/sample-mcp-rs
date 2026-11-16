@@ -1,0 +1,37 @@
+id: mcp-cors-any-origin
+
+info:
+  name: MCP 엔드포인트가 모든 Origin 허용
+  author: sample-mcp-rs
+  severity: low
+  description: |
+    임의 Origin의 preflight를 허용하고 Origin 검사로 403을 돌려주지 않는다.
+    MCP Streamable HTTP 스펙은 Origin을 검증하도록 권고한다(DNS 리바인딩 대비).
+    운영에서는 MCP_ALLOWED_ORIGINS를 설정한다.
+  tags: mcp,cors,misconfig,custom
+
+http:
+  - raw:
+      - |
+        OPTIONS {{Path}} HTTP/1.1
+        Host: {{Hostname}}
+        Origin: https://evil.example
+        Access-Control-Request-Method: POST
+        Access-Control-Request-Headers: authorization,content-type
+
+      - |
+        POST {{Path}} HTTP/1.1
+        Host: {{Hostname}}
+        Origin: https://evil.example
+        Content-Type: application/json
+
+        {"jsonrpc":"2.0","id":1,"method":"ping"}
+
+    req-condition: true
+    matchers:
+      - type: dsl
+        dsl:
+          - 'status_code_1 < 400'
+          - 'access_control_allow_origin_1 == "*" || access_control_allow_origin_1 == "https://evil.example"'
+          - 'status_code_2 != 403'
+        condition: and

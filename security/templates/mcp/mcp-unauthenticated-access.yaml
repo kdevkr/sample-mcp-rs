@@ -1,0 +1,32 @@
+id: mcp-unauthenticated-access
+
+info:
+  name: MCP 엔드포인트 무인증 접근
+  author: sample-mcp-rs
+  severity: high
+  description: |
+    토큰 없이 MCP initialize 요청이 성공하면 누구나 도구를 호출할 수 있다.
+    정상 서버는 401과 resource_metadata가 담긴 WWW-Authenticate를 돌려준다.
+  tags: mcp,auth,custom
+
+http:
+  - method: POST
+    path:
+      - "{{BaseURL}}"
+    headers:
+      Content-Type: application/json
+      Accept: application/json, text/event-stream
+    body: |
+      {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"nuclei","version":"0"}}}
+
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - '"protocolVersion"'
+          - '"serverInfo"'
+        condition: and

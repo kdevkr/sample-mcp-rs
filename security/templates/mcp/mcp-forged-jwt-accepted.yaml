@@ -1,0 +1,46 @@
+id: mcp-forged-jwt-accepted
+
+info:
+  name: MCP 서버가 위조 JWT를 받음
+  author: sample-mcp-rs
+  severity: critical
+  description: |
+    서명이 없거나(alg=none) 공개된 HMAC 키로 서명한 토큰으로 도구를 호출한다.
+    200이 나오면 서명 검증이 우회된 것이다.
+    issuer, audience는 -var issuer=... -var audience=... 로 대상에 맞춘다.
+  tags: mcp,jwt,auth,custom
+
+variables:
+  issuer: "http://localhost:4000"
+  audience: "{{BaseURL}}"
+  claims: '{"iss":"{{issuer}}","aud":"{{audience}}","sub":"nuclei","tenant_id":"tenant-a","scope":"mcp:read","exp":4102444800}'
+  claims_b64: '{{replace_regex(replace(replace(base64(claims), "+", "-"), "/", "_"), "=+$", "")}}'
+
+http:
+  - method: POST
+    path:
+      - "{{BaseURL}}"
+    headers:
+      Authorization: "Bearer {{token}}"
+      Content-Type: application/json
+      Accept: application/json, text/event-stream
+    body: |
+      {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"nuclei","version":"0"}}}
+
+    payloads:
+      token:
+        # alg=none, 서명 없음. 헤더 {"alg":"none","typ":"at+jwt"}
+        - "eyJhbGciOiJub25lIiwidHlwIjoiYXQrand0In0.{{claims_b64}}."
+        # 알려진 약한 키 "secret"으로 HS256 서명
+        - '{{generate_jwt(claims, "HS256", "secret")}}'
+    stop-at-first-match: true
+
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - '"serverInfo"'
