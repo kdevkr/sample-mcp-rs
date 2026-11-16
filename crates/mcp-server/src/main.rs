@@ -19,12 +19,18 @@ use crate::tools::SampleServer;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
+    let lambda = std::env::var_os("AWS_LAMBDA_RUNTIME_API").is_some();
+    let logs = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
-        .with_writer(std::io::stderr)
-        .init();
+        .with_writer(std::io::stderr);
+    // Lambda에서는 authorizer와 같이 JSON으로 남겨 CloudWatch에서 필드로 검색한다.
+    if lambda {
+        logs.json().without_time().init();
+    } else {
+        logs.init();
+    }
 
     let config = VerifierConfig::from_env()?;
     let path = mcp_path(&config.audience)?;
@@ -38,7 +44,7 @@ async fn main() -> anyhow::Result<()> {
         origins,
     );
 
-    if std::env::var_os("AWS_LAMBDA_RUNTIME_API").is_some() {
+    if lambda {
         lambda_http::run(app).await.map_err(|e| anyhow::anyhow!(e))
     } else {
         // 컨테이너에서 띄울 때는 HOST=0.0.0.0으로 연다. 기본은 이 PC에서만 접속 가능하다.
@@ -46,9 +52,34 @@ async fn main() -> anyhow::Result<()> {
         let port = std::env::var("PORT").unwrap_or_else(|_| "3000".into());
         let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
         tracing::info!("listening on http://{}{path}", listener.local_addr()?);
-        axum::serve(listener, app).await?;
+        axum::serve(listener, app)
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
         Ok(())
     }
+}
+
+/// Ctrl+C나 SIGTERM(컨테이너 종료)을 받으면 새 연결을 받지 않고, 처리 중인 요청을 마친 뒤 끝낸다.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+    tokio::select! {
+        () = ctrl_c => {}
+        () = terminate => {}
+    }
+    tracing::info!("shutting down");
 }
 
 /// MCP 엔드포인트 경로는 MCP_RESOURCE_URL의 경로를 그대로 쓴다. 토큰 `aud`와 실제 경로가 어긋나지 않게 한다.
