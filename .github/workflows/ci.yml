@@ -99,7 +99,7 @@ jobs:
       MCP_RESOURCE_URL: http://localhost:3000/mcp
       NUCLEI_TAG: v3.11.1
       HTTPX_TAG: v1.12.0
-      TLSX_TAG: v1.4.0
+      TLSX_TAG: v1.2.2
       NAABU_TAG: v2.7.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
