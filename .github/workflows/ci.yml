@@ -137,4 +137,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: security-reports
-          path: security/reports
+          # selftest가 만든 임시 TLS 개인 키는 올리지 않는다.
+          path: |
+            security/reports
+            !security/reports/selftest/tls.key
