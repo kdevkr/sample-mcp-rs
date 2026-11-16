@@ -110,6 +110,7 @@ GitHub Actions(`.github/workflows/ci.yml`)는 푸시와 PR마다 아래를 실�
 - `cargo audit`, `pnpm audit`
 - 인가 서버 `typecheck`
 - 위 서버 세 개를 띄운 e2e (`OTHER_MCP_URL` 포함)
+- nuclei 취약점 검사 ([security/README.md](security/README.md))
 
 ## 환경 변수
 

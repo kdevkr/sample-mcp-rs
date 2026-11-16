@@ -1,0 +1,35 @@
+id: oauth-protected-resource-metadata
+
+info:
+  name: OAuth Protected Resource Metadata (RFC 9728)
+  author: sample-mcp-rs
+  severity: info
+  description: 보호 리소스 메타데이터에서 resource와 인가 서버 주소를 뽑는다.
+  tags: oauth,mcp,discovery,custom
+
+http:
+  - method: GET
+    path:
+      - "{{RootURL}}/.well-known/oauth-protected-resource{{Path}}"
+      - "{{RootURL}}/.well-known/oauth-protected-resource"
+    stop-at-first-match: true
+
+    matchers-condition: and
+    matchers:
+      - type: status
+        status:
+          - 200
+      - type: word
+        part: body
+        words:
+          - '"authorization_servers"'
+
+    extractors:
+      - type: json
+        name: authorization_servers
+        json:
+          - '.authorization_servers[]'
+      - type: json
+        name: resource
+        json:
+          - '.resource'

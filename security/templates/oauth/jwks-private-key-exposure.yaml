@@ -1,0 +1,39 @@
+id: jwks-private-key-exposure
+
+info:
+  name: JWKS에 개인 키 노출
+  author: sample-mcp-rs
+  severity: critical
+  description: |
+    공개 JWKS에 개인 키 파라미터(d, p, q, dp, dq, qi) 또는 대칭 키(k)가 있으면
+    누구나 유효한 토큰을 서명할 수 있다.
+    discovery의 jwks_uri 경로를 대상 호스트에 붙여 요청한다(키가 같은 호스트에 있다는 전제).
+  tags: oauth,jwks,exposure,custom
+
+http:
+  - method: GET
+    path:
+      - "{{RootURL}}/.well-known/openid-configuration"
+
+    extractors:
+      - type: regex
+        name: jwks_path
+        internal: true
+        group: 1
+        regex:
+          - '"jwks_uri"\s*:\s*"https?://[^/"]+(/[^"]*)"'
+
+  - method: GET
+    path:
+      - "{{RootURL}}{{jwks_path}}"
+
+    matchers-condition: and
+    matchers:
+      - type: word
+        part: body
+        words:
+          - '"keys"'
+      - type: regex
+        part: body
+        regex:
+          - '"(d|p|q|dp|dq|qi|k)"\s*:\s*"'

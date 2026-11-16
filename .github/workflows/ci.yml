@@ -87,3 +87,45 @@ jobs:
       - run: pnpm -C auth e2e
       - if: failure()
         run: tail -n 50 auth.log mcp.log other.log
+
+  # ProjectDiscovery nuclei로 실행 중인 서버를 검사한다. high 이상이면 실패.
+  # 먼저 일부러 취약한 서버로 템플릿이 실제로 잡는지 확인한다.
+  security-scan:
+    needs: [rust, auth]
+    runs-on: ubuntu-latest
+    env:
+      AUTH_ISSUER: http://localhost:4000
+      MCP_RESOURCE_URL: http://localhost:3000/mcp
+      NUCLEI_TAG: v3.11.1
+      HTTPX_TAG: v1.12.0
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: auth/pnpm-lock.yaml
+      - run: pnpm -C auth install --frozen-lockfile
+      - run: cargo build -p mcp-server --locked
+      - run: docker pull -q projectdiscovery/nuclei:$NUCLEI_TAG && docker pull -q projectdiscovery/httpx:$HTTPX_TAG
+      - name: Templates catch a vulnerable server
+        run: security/selftest.sh
+      - name: Start servers
+        run: |
+          pnpm -C auth start > auth.log 2>&1 &
+          ./target/debug/mcp-server > mcp.log 2>&1 &
+          for url in $AUTH_ISSUER/.well-known/openid-configuration \
+                     http://localhost:3000/.well-known/oauth-protected-resource; do
+            curl -sf --retry 30 --retry-connrefused --retry-delay 1 -o /dev/null "$url"
+          done
+      - run: security/scan.sh
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: security-reports
+          path: security/reports
