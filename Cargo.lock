@@ -2115,10 +2115,12 @@ dependencies = [
  "bitflags",
  "bytes",
  "http",
+ "http-body",
  "percent-encoding",
  "pin-project-lite",
  "tower-layer",
  "tower-service",
+ "tracing",
 ]
 
 [[package]]

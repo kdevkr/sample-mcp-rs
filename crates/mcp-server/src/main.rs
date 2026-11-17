@@ -13,6 +13,8 @@ use axum::routing::get;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
+use tracing::Level;
 
 use crate::auth::{AuthState, protected_resource_metadata, require_bearer, split_resource};
 use crate::tools::SampleServer;
@@ -136,7 +138,12 @@ fn router(
         app = app.layer(from_fn_with_state(allowed, reject_unknown_origin));
     }
     // CORS는 가장 바깥에 둬서 브라우저의 preflight(OPTIONS)가 인증·Origin 검사 전에 처리되게 한다.
-    app.layer(cors(allowed_origins))
+    // 요청마다 메서드·경로·상태 코드·처리 시간을 남긴다. 헤더(토큰)는 남기지 않는다.
+    app.layer(cors(allowed_origins)).layer(
+        TraceLayer::new_for_http()
+            .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+            .on_response(DefaultOnResponse::new().level(Level::INFO)),
+    )
 }
 
 /// Origin 헤더가 있는데 허용 목록에 없으면 403. Origin이 없는 요청(브라우저 밖 클라이언트)은 통과한다.

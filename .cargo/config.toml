@@ -1,0 +1,3 @@
+# rust-version은 빌드 툴체인 확인용이다. 의존성 갱신이 이 버전에 묶여 보안 업데이트가 늦어지지 않게 한다.
+[resolver]
+incompatible-rust-versions = "allow"

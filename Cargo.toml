@@ -6,6 +6,8 @@ members = ["crates/*"]
 edition = "2024"
 version = "0.1.0"
 publish = false
+# 의존성 중 uuid가 1.89를 요구한다. 낮은 버전에서는 문법 오류 대신 이 버전을 알려준다.
+rust-version = "1.89"
 
 [workspace.dependencies]
 anyhow = "1"

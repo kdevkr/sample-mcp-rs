@@ -24,18 +24,26 @@ async function discover() {
   return getJson(`${meta.authorization_servers[0]}/.well-known/openid-configuration`);
 }
 
-async function getJson(url, init) {
+async function getJson(url: string, init?: RequestInit): Promise<any> {
   const res = await fetch(url, init);
   assert.ok(res.ok, `${url} → ${res.status}`);
   return res.json();
 }
 
 /** devInteractions 화면을 따라가 인가 코드를 받는다. 로그인이 거부되면 응답 상태를 돌려준다. */
-async function authorize(disc, clientId, login, scope = 'openid mcp:read') {
-  const jar = new Map();
-  const request = async (url, init = {}) => {
+type Discovery = { authorization_endpoint: string; token_endpoint: string; registration_endpoint: string };
+type Authorization = { code?: string | null; verifier?: string; rejected?: number };
+
+async function authorize(
+  disc: Discovery,
+  clientId: string,
+  login: string,
+  scope = 'openid mcp:read',
+): Promise<Authorization> {
+  const jar = new Map<string, string>();
+  const request = async (url: string, init: RequestInit = {}) => {
     const cookie = [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
-    const res = await fetch(url, { redirect: 'manual', ...init, headers: { cookie, ...init.headers } });
+    const res = await fetch(url, { redirect: 'manual', ...init, headers: { cookie, ...(init.headers as Record<string, string>) } });
     for (const c of res.headers.getSetCookie()) {
       const [pair] = c.split(';');
       const i = pair.indexOf('=');
@@ -60,7 +68,7 @@ async function authorize(disc, clientId, login, scope = 'openid mcp:read') {
   let res = await request(url);
   for (let step = 0; step < 12; step++) {
     if (res.status >= 300 && res.status < 400) {
-      url = new URL(res.headers.get('location'), url).toString();
+      url = new URL(res.headers.get('location') ?? '', url).toString();
       if (url.startsWith(REDIRECT_URI)) {
         return { code: new URL(url).searchParams.get('code'), verifier };
       }
@@ -70,7 +78,7 @@ async function authorize(disc, clientId, login, scope = 'openid mcp:read') {
     const html = await res.text();
     const action = html.match(/action="([^"]+)"/)?.[1];
     if (!action) return { rejected: res.status };
-    const form = html.includes('value="login"')
+    const form: Record<string, string> = html.includes('value="login"')
       ? { prompt: 'login', login, password: 'x' }
       : { prompt: 'consent' };
     url = new URL(action, url).toString();
@@ -83,7 +91,7 @@ async function authorize(disc, clientId, login, scope = 'openid mcp:read') {
   throw new Error('authorization did not finish');
 }
 
-function callTool(token, name, args = {}) {
+function callTool(token: string, name: string, args: Record<string, unknown> = {}) {
   return fetch(MCP, {
     method: 'POST',
     headers: {
@@ -96,16 +104,16 @@ function callTool(token, name, args = {}) {
   });
 }
 
-async function toolResult(token, name, args) {
+async function toolResult(token: string, name: string, args?: Record<string, unknown>) {
   const res = await callTool(token, name, args);
   assert.equal(res.status, 200, `tools/call ${name}`);
   return (await res.json()).result;
 }
 
 /** 로그인부터 토큰 교환까지 거쳐 액세스 토큰을 받는다. */
-async function accessToken(disc, clientId, login, scope) {
+async function accessToken(disc: Discovery, clientId: string, login: string, scope?: string): Promise<string> {
   const { code, verifier } = await authorize(disc, clientId, login, scope);
-  assert.ok(code, `${login}: no authorization code`);
+  assert.ok(code && verifier, `${login}: no authorization code`);
   const token = await getJson(disc.token_endpoint, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -121,7 +129,7 @@ async function accessToken(disc, clientId, login, scope) {
   return token.access_token;
 }
 
-const disc = await discover();
+const disc: Discovery = await discover();
 const client = await getJson(disc.registration_endpoint, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },

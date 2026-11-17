@@ -3,6 +3,7 @@ name = "auth-common"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 base64 = "0.23"
