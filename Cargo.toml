@@ -12,7 +12,7 @@ rust-version = "1.89"
 [workspace.dependencies]
 anyhow = "1"
 axum = "0.8"
-jsonwebtoken = { version = "11", default-features = false }
+jsonwebtoken = { version = "12", default-features = false }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
