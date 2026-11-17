@@ -29,6 +29,18 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
+  # Cargo.toml의 rust-version으로 빌드되는지 확인한다. 의존성이 더 높은 버전을 요구하면 실패하니 그때 올린다.
+  msrv:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          msrv=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)
+          rustup toolchain install "$msrv" --profile minimal && rustup default "$msrv"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: cargo check --workspace --all-targets --locked
+
   audit:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -70,28 +82,8 @@ jobs:
       OTHER_MCP_URL: http://localhost:3001/other
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: rustup toolchain install stable --profile minimal && rustup default stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        with:
-          version: 10
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: auth/pnpm-lock.yaml
-      - run: pnpm -C auth install --frozen-lockfile
-      - run: cargo build -p mcp-server --locked
-      - name: Start servers
-        run: |
-          pnpm -C auth start > auth.log 2>&1 &
-          ./target/debug/mcp-server > mcp.log 2>&1 &
-          PORT=3001 MCP_RESOURCE_URL=$OTHER_MCP_URL ./target/debug/mcp-server > other.log 2>&1 &
-          for url in $AUTH_ISSUER/.well-known/openid-configuration \
-                     http://localhost:3000/.well-known/oauth-protected-resource \
-                     http://localhost:3001/.well-known/oauth-protected-resource; do
-            curl -sf --retry 30 --retry-connrefused --retry-delay 1 -o /dev/null "$url"
-          done
+      - uses: ./.github/actions/prepare-servers
+      - run: bash .github/start-servers.sh
       - run: pnpm -C auth e2e
       - if: failure()
         run: tail -n 50 auth.log mcp.log other.log
@@ -111,18 +103,7 @@ jobs:
       NAABU_TAG: v2.7.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        with:
-          version: 10
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-          cache: pnpm
-          cache-dependency-path: auth/pnpm-lock.yaml
-      - run: pnpm -C auth install --frozen-lockfile
-      - run: cargo build -p mcp-server --locked
+      - uses: ./.github/actions/prepare-servers
       - name: Pull ProjectDiscovery images
         run: |
           for img in nuclei:$NUCLEI_TAG httpx:$HTTPX_TAG tlsx:$TLSX_TAG naabu:$NAABU_TAG; do
@@ -130,13 +111,7 @@ jobs:
           done
       - name: Checks catch a vulnerable server
         run: security/selftest.sh
-      - name: Start servers
-        run: |
-          pnpm -C auth start > auth.log 2>&1 &
-          ./target/debug/mcp-server > mcp.log 2>&1 &
-          for url in $AUTH_ISSUER/.well-known/openid-configuration                      http://localhost:3000/.well-known/oauth-protected-resource; do
-            curl -sf --retry 30 --retry-connrefused --retry-delay 1 -o /dev/null "$url"
-          done
+      - run: bash .github/start-servers.sh
       - name: Scan
         run: security/scan.sh
         env:

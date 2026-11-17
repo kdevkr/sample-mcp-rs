@@ -2,6 +2,7 @@ mod auth;
 mod tools;
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use auth_common::{Url, Verifier, VerifierConfig, url_host};
 use axum::Router;
@@ -13,11 +14,14 @@ use axum::routing::get;
 use rmcp::transport::streamable_http_server::session::never::NeverSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
 use crate::auth::{AuthState, protected_resource_metadata, require_bearer, split_resource};
 use crate::tools::SampleServer;
+
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -137,6 +141,11 @@ fn router(
         let allowed: Arc<[HeaderValue]> = allowed_origins.clone().into();
         app = app.layer(from_fn_with_state(allowed, reject_unknown_origin));
     }
+    // 응답이 늦는 요청을 끊는다. 도구는 바로 응답하고, Lambda는 함수 타임아웃이 따로 있다.
+    let app = app.layer(TimeoutLayer::with_status_code(
+        StatusCode::REQUEST_TIMEOUT,
+        REQUEST_TIMEOUT,
+    ));
     // CORS는 가장 바깥에 둬서 브라우저의 preflight(OPTIONS)가 인증·Origin 검사 전에 처리되게 한다.
     // 요청마다 메서드·경로·상태 코드·처리 시간을 남긴다. 헤더(토큰)는 남기지 않는다.
     app.layer(cors(allowed_origins)).layer(

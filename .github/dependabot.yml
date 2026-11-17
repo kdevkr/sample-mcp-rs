@@ -21,7 +21,8 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: github-actions
-    directory: /
+    # 루트는 워크플로만 본다. 로컬 composite 액션의 고정 SHA도 함께 올린다.
+    directories: ["/", "/.github/actions/*"]
     schedule:
       interval: weekly
     groups:
